@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initEncryptionKey } from '../lib/crypto.js';
+import { initEncryptionKey, encrypt } from '../lib/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
@@ -47,6 +47,7 @@ export function initDb(dbPath?: string): Database.Database {
   migrateModelsV10(db);
   migrateModelsV11(db);
   ensureUnifiedKey(db);
+  seedEnvKeys(db);
 
   console.log(`Database initialized at ${resolvedPath}`);
   return db;
@@ -931,10 +932,50 @@ function migrateModelsV11(db: Database.Database) {
 
 function ensureUnifiedKey(db: Database.Database) {
   const existing = db.prepare("SELECT value FROM settings WHERE key = 'unified_api_key'").get() as { value: string } | undefined;
+  
+  const envUnifiedKey = process.env.UNIFIED_API_KEY;
+  if (envUnifiedKey && envUnifiedKey.trim().length > 0) {
+    if (existing) {
+      if (existing.value !== envUnifiedKey.trim()) {
+        db.prepare("UPDATE settings SET value = ? WHERE key = 'unified_api_key'").run(envUnifiedKey.trim());
+        console.log(`[Settings] Updated unified API key from UNIFIED_API_KEY env var`);
+      }
+    } else {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('unified_api_key', ?)").run(envUnifiedKey.trim());
+      console.log(`[Settings] Set unified API key from UNIFIED_API_KEY env var`);
+    }
+    return;
+  }
+
   if (!existing) {
     const key = `freellmapi-${crypto.randomBytes(24).toString('hex')}`;
     db.prepare("INSERT INTO settings (key, value) VALUES ('unified_api_key', ?)").run(key);
     console.log(`\n  Your unified API key: ${key}\n`);
+  }
+}
+
+function seedEnvKeys(db: Database.Database) {
+  const platforms = [
+    'google', 'groq', 'cerebras', 'sambanova', 'nvidia', 'mistral',
+    'openrouter', 'github', 'cohere', 'cloudflare', 'zhipu', 'ollama',
+    'kilo', 'pollinations', 'llm7'
+  ];
+
+  for (const platform of platforms) {
+    const envVarName = `${platform.toUpperCase()}_API_KEY`;
+    const envKey = process.env[envVarName];
+
+    if (envKey && envKey.trim().length > 0) {
+      const existing = db.prepare('SELECT id FROM api_keys WHERE platform = ?').get(platform);
+      if (!existing) {
+        const { encrypted, iv, authTag } = encrypt(envKey.trim());
+        db.prepare(`
+          INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+          VALUES (?, 'env-seeded', ?, ?, ?, 'unknown', 1)
+        `).run(platform, encrypted, iv, authTag);
+        console.log(`[Env Seeder] Seeded API key for platform: ${platform} from ${envVarName}`);
+      }
+    }
   }
 }
 

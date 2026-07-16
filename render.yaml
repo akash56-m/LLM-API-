@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: freellmapi
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: node server/dist/index.js
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
+      - key: ENCRYPTION_KEY
+        sync: false
+        placeholder: "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+    disk:
+      name: freellmapi-db
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
